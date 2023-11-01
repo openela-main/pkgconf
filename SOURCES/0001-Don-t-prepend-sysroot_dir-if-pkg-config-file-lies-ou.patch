@@ -1,0 +1,124 @@
+From 305b359d7d07840df3e420e6b08f91c01abe6012 Mon Sep 17 00:00:00 2001
+From: Sandro Mani <manisandro@gmail.com>
+Date: Wed, 23 Jun 2021 14:09:05 +0200
+Subject: [PATCH] Don't prepend sysroot_dir if pkg-config file lies outside of
+ sysroot_dir
+
+(cherry picked from commit ed86f2dda3bc99e34775f0fae54e314718037516)
+---
+ libpkgconf/pkg.c     | 10 ++++++++++
+ tests/regress.sh     | 28 ++++++++++++----------------
+ tests/test_env.sh.in |  2 +-
+ 3 files changed, 23 insertions(+), 17 deletions(-)
+
+diff --git a/libpkgconf/pkg.c b/libpkgconf/pkg.c
+index 214f544..fff6eda 100644
+--- a/libpkgconf/pkg.c
++++ b/libpkgconf/pkg.c
+@@ -378,6 +378,16 @@ pkgconf_pkg_new_from_file(pkgconf_client_t *client, const char *filename, FILE *
+ 	pkg->pc_filedir = pkg_get_parent_dir(pkg);
+ 	pkgconf_tuple_add(client, &pkg->vars, "pcfiledir", pkg->pc_filedir, true);
+ 
++	/* If pc_filedir is outside of sysroot_dir, clear pc_filedir
++	/* See https://github.com/pkgconf/pkgconf/issues/213
++	 */
++	if (client->sysroot_dir && strncmp(pkg->pc_filedir, client->sysroot_dir, strlen(client->sysroot_dir)))
++	{
++		free(client->sysroot_dir);
++		client->sysroot_dir = NULL;
++		pkgconf_client_set_sysroot_dir(client, NULL);
++	}
++
+ 	/* make module id */
+ 	if ((idptr = strrchr(pkg->filename, PKG_DIR_SEP_S)) != NULL)
+ 		idptr++;
+diff --git a/tests/regress.sh b/tests/regress.sh
+index 47877d4..04d4042 100755
+--- a/tests/regress.sh
++++ b/tests/regress.sh
+@@ -112,7 +112,7 @@ libs_never_mergeback_body()
+ 	export PKG_CONFIG_PATH="${selfdir}/lib1"
+ 	atf_check \
+ 		-o inline:"-L/test/bar/lib -lfoo1 \n" \
+-		pkgconf --libs prefix-foo1	
++		pkgconf --libs prefix-foo1
+ 	atf_check \
+ 		-o inline:"-L/test/bar/lib -lfoo1 -lfoo2 \n" \
+ 		pkgconf --libs prefix-foo1 prefix-foo2
+@@ -160,9 +160,9 @@ isystem_munge_order_body()
+ 
+ isystem_munge_sysroot_body()
+ {
+-	export PKG_CONFIG_PATH="${selfdir}/lib1" PKG_CONFIG_SYSROOT_DIR='/test'
++	export PKG_CONFIG_PATH="${selfdir}/lib1" PKG_CONFIG_SYSROOT_DIR="${selfdir}"
+ 	atf_check \
+-		-o match:"-isystem /test/opt/bad/include" \
++		-o match:"-isystem ${selfdir}/opt/bad/include" \
+ 		pkgconf --cflags isystem
+ }
+ 
+@@ -176,9 +176,9 @@ idirafter_munge_order_body()
+ 
+ idirafter_munge_sysroot_body()
+ {
+-	export PKG_CONFIG_PATH="${selfdir}/lib1" PKG_CONFIG_SYSROOT_DIR='/test'
++	export PKG_CONFIG_PATH="${selfdir}/lib1" PKG_CONFIG_SYSROOT_DIR="${selfdir}"
+ 	atf_check \
+-		-o match:"-idirafter /test/opt/bad/include" \
++		-o match:"-idirafter ${selfdir}/opt/bad/include" \
+ 		pkgconf --cflags idirafter
+ }
+ 
+@@ -195,20 +195,16 @@ pcpath_body()
+ 	export PKG_CONFIG_PATH="${selfdir}/lib2"
+ 	atf_check \
+ 		-o inline:"-fPIC -I/test/include/foo \n" \
+-		pkgconf --cflags ${selfdir}/lib3/bar.pc	
++		pkgconf --cflags ${selfdir}/lib3/bar.pc
+ }
+ 
+ sysroot_munge_body()
+ {
+-	export PKG_CONFIG_PATH="${selfdir}/lib1" PKG_CONFIG_SYSROOT_DIR="/sysroot"
++	sed "s|/sysroot/|${selfdir}/|g" ${selfdir}/lib1/sysroot-dir.pc > ${selfdir}/lib1/sysroot-dir-selfdir.pc
++	export PKG_CONFIG_PATH="${selfdir}/lib1" PKG_CONFIG_SYSROOT_DIR="${selfdir}"
+ 	atf_check \
+-		-o inline:"-L/sysroot/lib -lfoo \n" \
+-		pkgconf --libs sysroot-dir
+-
+-	export PKG_CONFIG_SYSROOT_DIR="/sysroot2"
+-	atf_check \
+-		-o inline:"-L/sysroot2/sysroot/lib -lfoo \n" \
+-		pkgconf --libs sysroot-dir
++		-o inline:"-L${selfdir}/lib -lfoo \n" \
++		pkgconf --libs sysroot-dir-selfdir
+ }
+ 
+ virtual_variable_body()
+@@ -244,8 +240,8 @@ malformed_quoting_body()
+ 
+ explicit_sysroot_body()
+ {
+-	export PKG_CONFIG_SYSROOT_DIR=/sysroot
+-	atf_check -o inline:"/sysroot/usr/share/test\n" \
++	export PKG_CONFIG_SYSROOT_DIR=${selfdir}
++	atf_check -o inline:"${selfdir}/usr/share/test\n" \
+ 		pkgconf --with-path="${selfdir}/lib1" --variable=pkgdatadir explicit-sysroot
+ }
+ 
+diff --git a/tests/test_env.sh.in b/tests/test_env.sh.in
+index 17ee1f5..2c081f6 100644
+--- a/tests/test_env.sh.in
++++ b/tests/test_env.sh.in
+@@ -24,7 +24,7 @@ done
+ selfdir="@abs_top_srcdir@/tests"
+ LIBRARY_PATH_ENV="LIBRARY_PATH"
+ PATH_SEP=":"
+-SYSROOT_DIR="${selfdir}/test"
++SYSROOT_DIR="${selfdir}"
+ case "$(uname -s)" in
+ Msys|CYGWIN*) PATH_SEP=";";;
+ Haiku) LIBRARY_PATH_ENV="BELIBRARIES";;
+-- 
+2.31.1
+
